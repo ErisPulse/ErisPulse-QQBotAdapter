@@ -28,6 +28,7 @@ class QQBotWebSocket:
         self._token_refresh_task: Optional[asyncio.Task] = None
         self._reconnect_count = 0
         self._max_reconnect = 50
+        self._closing = False
 
     async def connect(self):
         self.session = aiohttp.ClientSession()
@@ -121,7 +122,7 @@ class QQBotWebSocket:
             self.adapter.logger.error(f"监听异常: {e}")
         finally:
             self._connected = False
-            if not self.listen_task or not self.listen_task.cancelled():
+            if not self._closing and (not self.listen_task or not self.listen_task.cancelled()):
                 await self._reconnect()
 
     async def _handle_message(self, data: dict):
@@ -169,6 +170,9 @@ class QQBotWebSocket:
             self.heartbeat_interval = data_inner.get("heartbeat_interval", 45000)
 
     async def _reconnect(self):
+        if self._closing:
+            return
+
         if self.heartbeat_task:
             self.heartbeat_task.cancel()
             try:
@@ -185,6 +189,9 @@ class QQBotWebSocket:
         wait_time = min(5 * (2 ** min(self._reconnect_count, 6)), 300)
         self.adapter.logger.warning(f"{wait_time}秒后尝试第 {self._reconnect_count} 次重连")
         await asyncio.sleep(wait_time)
+
+        if self._closing:
+            return
 
         try:
             if self.ws and not self.ws.closed:
@@ -210,6 +217,7 @@ class QQBotWebSocket:
             self.adapter.logger.error(f"Token 刷新异常: {e}")
 
     async def close(self):
+        self._closing = True
         self._connected = False
 
         if self._token_refresh_task:

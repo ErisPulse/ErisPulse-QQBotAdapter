@@ -1,6 +1,6 @@
 [project]
 name = "ErisPulse-QQBotAdapter"
-version = "1.0.0"
+version = "1.0.1"
 description = "ErisPulse的QQ官方机器人适配模块"
 readme = "README.md"
 requires-python = ">=3.10"
