@@ -1,8 +1,10 @@
 import asyncio
 import json
 import time
-import aiohttp
 from typing import Optional
+
+from ErisPulse.Core import client
+from ErisPulse.Core.Bases.websocket import WSMessage
 
 
 class QQBotWebSocket:
@@ -17,8 +19,7 @@ class QQBotWebSocket:
 
     def __init__(self, adapter):
         self.adapter = adapter
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self.ws = None
         self.heartbeat_interval = 45000
         self.heartbeat_task: Optional[asyncio.Task] = None
         self.listen_task: Optional[asyncio.Task] = None
@@ -31,32 +32,35 @@ class QQBotWebSocket:
         self._closing = False
 
     async def connect(self):
-        self.session = aiohttp.ClientSession()
         gateway_url = self.adapter.config.get("gateway_url", "wss://api.sgroup.qq.com/websocket/")
         await self._connect(gateway_url)
 
     async def _connect(self, url: str):
         try:
-            self.ws = await self.session.ws_connect(url)
+            self.ws = await client.ws_connect(url)
             self.adapter.logger.info("WebSocket 已连接到 QQBot 网关")
             self._connected = True
 
-            msg = await self.ws.receive_json()
-            if msg.get("op") == self.OP_HELLO:
-                data = msg.get("d", {})
-                self.heartbeat_interval = data.get("heartbeat_interval", 45000)
+            msg = await self.ws.receive()
+            if msg.type == WSMessage.TEXT:
+                data = json.loads(msg.data)
+                if data.get("op") == self.OP_HELLO:
+                    inner = data.get("d", {})
+                    self.heartbeat_interval = inner.get("heartbeat_interval", 45000)
 
-                if self.session_id and self.seq is not None:
-                    await self._resume()
+                    if self.session_id and self.seq is not None:
+                        await self._resume()
+                    else:
+                        await self._identify()
+
+                    self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+                    self.listen_task = asyncio.create_task(self._listen())
+
+                    self._reconnect_count = 0
                 else:
-                    await self._identify()
-
-                self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                self.listen_task = asyncio.create_task(self._listen())
-
-                self._reconnect_count = 0
+                    self.adapter.logger.error(f"未收到 Hello 消息: {data}")
             else:
-                self.adapter.logger.error(f"未收到 Hello 消息: {msg}")
+                self.adapter.logger.error(f"未收到 Hello 消息: {msg.type}")
 
         except Exception as e:
             self.adapter.logger.error(f"WebSocket 连接失败: {e}")
@@ -109,11 +113,12 @@ class QQBotWebSocket:
 
     async def _listen(self):
         try:
-            async for msg in self.ws:
-                if msg.type == aiohttp.WSMsgType.TEXT:
+            while self._connected:
+                msg = await self.ws.receive()
+                if msg.type == WSMessage.TEXT:
                     data = json.loads(msg.data)
                     await self._handle_message(data)
-                elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                elif msg.type in (WSMessage.CLOSE, WSMessage.ERROR):
                     self.adapter.logger.warning(f"WebSocket 关闭: {msg.type}")
                     break
         except asyncio.CancelledError:
@@ -139,6 +144,8 @@ class QQBotWebSocket:
                 self.session_id = d.get("session_id") if d else None
                 user = d.get("user", {}) if d else {}
                 self.adapter.bot_id = str(user.get("id", ""))
+                if self.adapter._active_account:
+                    self.adapter._active_account.bot_id = self.adapter.bot_id
                 self.adapter.logger.info(f"QQBot 就绪, bot_id: {self.adapter.bot_id}")
                 await self.adapter._on_connect()
             elif t == "RESUMED":
@@ -148,8 +155,7 @@ class QQBotWebSocket:
                     onebot_event = self.adapter.convert(d, t or "")
                     if onebot_event:
                         self.adapter._store_event_msg_id(onebot_event)
-                        from ErisPulse.Core import logger
-                        logger.debug(f"收到事件: {onebot_event}")
+                        self.adapter.logger.debug(f"收到事件: {onebot_event}")
                         await self.adapter.sdk.adapter.emit(onebot_event)
 
         elif op == self.OP_HEARTBEAT_ACK:
@@ -246,8 +252,5 @@ class QQBotWebSocket:
 
         if self.ws and not self.ws.closed:
             await self.ws.close()
-        if self.session:
-            await self.session.close()
-            self.session = None
 
         self.adapter.logger.info("WebSocket 连接已关闭")

@@ -1,14 +1,12 @@
 [project]
 name = "ErisPulse-QQBotAdapter"
-version = "1.0.1"
+version = "4.0.0"
 description = "ErisPulse的QQ官方机器人适配模块"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [ { name = "wsu2059", email = "wsu2059@qq.com" } ]
-dependencies = [
-    "aiohttp>=3.8.0"
-]
+dependencies = []
 
 [project.urls]
 "homepage" = "https://github.com/ErisPulse/ErisPulse-QQBotAdapter"
@@ -19,3 +17,7 @@ qq = "QQBotAdapter:QQBotAdapter"
 
 [tool.setuptools.packages.find]
 include = [ "QQBotAdapter" ]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
