@@ -30,6 +30,8 @@ class QQBotWebSocket:
         self._reconnect_count = 0
         self._max_reconnect = 50
         self._closing = False
+        self._reconnect_lock = asyncio.Lock()
+        self._reconnect_task: Optional[asyncio.Task] = None
 
     async def connect(self):
         gateway_url = self.adapter.config.get("gateway_url", "wss://api.sgroup.qq.com/websocket/")
@@ -64,7 +66,7 @@ class QQBotWebSocket:
 
         except Exception as e:
             self.adapter.logger.error(f"WebSocket 连接失败: {e}")
-            await self._reconnect()
+            self._schedule_reconnect()
 
     async def _identify(self):
         token = await self.adapter._ensure_token()
@@ -109,7 +111,7 @@ class QQBotWebSocket:
             pass
         except Exception as e:
             self.adapter.logger.error(f"心跳循环异常: {e}")
-            await self._reconnect()
+            self._schedule_reconnect()
 
     async def _listen(self):
         try:
@@ -122,13 +124,13 @@ class QQBotWebSocket:
                     self.adapter.logger.warning(f"WebSocket 关闭: {msg.type}")
                     break
         except asyncio.CancelledError:
-            pass
+            return
         except Exception as e:
             self.adapter.logger.error(f"监听异常: {e}")
         finally:
             self._connected = False
-            if not self._closing and (not self.listen_task or not self.listen_task.cancelled()):
-                await self._reconnect()
+            if not self._closing:
+                self._schedule_reconnect()
 
     async def _handle_message(self, data: dict):
         op = data.get("op")
@@ -163,50 +165,68 @@ class QQBotWebSocket:
 
         elif op == self.OP_RECONNECT:
             self.adapter.logger.warning("收到 Reconnect 指令，重新连接")
-            await self._reconnect()
+            self._schedule_reconnect()
 
         elif op == self.OP_INVALID_SESSION:
             self.adapter.logger.warning("会话无效，重新 Identify")
             self.session_id = None
             self.seq = None
-            await self._reconnect()
+            self._schedule_reconnect()
 
         elif op == self.OP_HELLO:
             data_inner = d if d else {}
             self.heartbeat_interval = data_inner.get("heartbeat_interval", 45000)
 
+    def _schedule_reconnect(self):
+        if self._closing:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(self._reconnect())
+
     async def _reconnect(self):
         if self._closing:
             return
 
-        if self.heartbeat_task:
-            self.heartbeat_task.cancel()
+        async with self._reconnect_lock:
+            self._connected = False
+
+            if self.heartbeat_task:
+                self.heartbeat_task.cancel()
+                try:
+                    await self.heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+                self.heartbeat_task = None
+
+            if self.listen_task:
+                self.listen_task.cancel()
+                try:
+                    await self.listen_task
+                except asyncio.CancelledError:
+                    pass
+                self.listen_task = None
+
+            self._reconnect_count += 1
+            if self._reconnect_count > self._max_reconnect:
+                self.adapter.logger.error("已达到最大重连次数，停止重连")
+                return
+
+            wait_time = min(5 * (2 ** min(self._reconnect_count, 6)), 300)
+            self.adapter.logger.warning(f"{wait_time}秒后尝试第 {self._reconnect_count} 次重连")
+            await asyncio.sleep(wait_time)
+
+            if self._closing:
+                return
+
             try:
-                await self.heartbeat_task
-            except asyncio.CancelledError:
+                if self.ws and not self.ws.closed:
+                    await self.ws.close()
+            except Exception:
                 pass
-            self.heartbeat_task = None
 
-        self._reconnect_count += 1
-        if self._reconnect_count > self._max_reconnect:
-            self.adapter.logger.error("已达到最大重连次数，停止重连")
-            return
-
-        wait_time = min(5 * (2 ** min(self._reconnect_count, 6)), 300)
-        self.adapter.logger.warning(f"{wait_time}秒后尝试第 {self._reconnect_count} 次重连")
-        await asyncio.sleep(wait_time)
-
-        if self._closing:
-            return
-
-        try:
-            if self.ws and not self.ws.closed:
-                await self.ws.close()
-        except Exception:
-            pass
-
-        gateway_url = self.adapter.config.get("gateway_url", "wss://api.sgroup.qq.com/websocket/")
-        await self._connect(gateway_url)
+            gateway_url = self.adapter.config.get("gateway_url", "wss://api.sgroup.qq.com/websocket/")
+            await self._connect(gateway_url)
 
     async def start_token_refresh(self):
         self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
@@ -225,6 +245,14 @@ class QQBotWebSocket:
     async def close(self):
         self._closing = True
         self._connected = False
+
+        if self._reconnect_task:
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
 
         if self._token_refresh_task:
             self._token_refresh_task.cancel()
