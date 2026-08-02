@@ -1,4 +1,25 @@
-# QQBotAdapter 模块文档
+<div align="center">
+
+<img src=".github/assets/ErisPulseLogo.png" width="180" alt="ErisPulse QQBotAdapter" />
+
+# ErisPulse QQBotAdapter
+
+**QQ 官方机器人平台适配器 —— 群聊 / 私聊 / 频道一站接入。**
+
+基于 ErisPulse 架构的 QQ 官方机器人协议适配器，通过 WebSocket 长连接接收事件，整合群聊、私聊、频道等多种场景，提供统一的事件处理和消息操作接口。
+
+<p>
+  <a href="https://pypi.org/project/ErisPulse-QQBotAdapter/"><img src="https://img.shields.io/pypi/v/ErisPulse-QQBotAdapter?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"></a>
+  <a href="https://pypi.org/project/ErisPulse-QQBotAdapter/"><img src="https://img.shields.io/badge/Python-3.10+-FFD43B?style=for-the-badge&logo=python&logoColor=blue" alt="Python"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/ErisPulse/ErisPulse-QQBotAdapter"><img src="https://img.shields.io/github/stars/ErisPulse/ErisPulse-QQBotAdapter?style=for-the-badge&logo=github&color=brightgreen" alt="Stars"></a>
+  <a href="https://pepy.tech/project/ErisPulse-QQBotAdapter"><img src="https://img.shields.io/pepy/dt/ErisPulse-QQBotAdapter?style=for-the-badge&color=blue" alt="Downloads"></a>
+  <a href="https://github.com/ErisPulse/ErisPulse"><img src="https://img.shields.io/badge/Powered_by-ErisPulse-FF6B9D?style=for-the-badge&logo=bookstack&logoColor=white" alt="ErisPulse"></a>
+</p>
+
+</div>
+
+---
 
 ## 简介
 QQBotAdapter 是基于 [ErisPulse](https://github.com/ErisPulse/ErisPulse/) 架构的QQ官方机器人协议适配器，通过WebSocket长连接接收事件，整合了群聊、私聊、频道等多种场景的功能模块，提供统一的事件处理和消息操作接口。
