@@ -21,7 +21,7 @@ class QQBotConfig(BotAccountConfig):
         metadata={
             "description": "QQ机器人应用ID",
             "required": True,
-            "webui": {"widget": "text", "group": "basic", "order": 1},
+            "ui": {"widget": "text", "group": "basic", "order": 1},
         },
     )
     secret: str = field(
@@ -30,14 +30,14 @@ class QQBotConfig(BotAccountConfig):
             "description": "QQ机器人客户端密钥",
             "required": True,
             "secret": True,
-            "webui": {"widget": "password", "group": "basic", "order": 2},
+            "ui": {"widget": "password", "group": "basic", "order": 2},
         },
     )
     sandbox: bool = field(
         default=False,
         metadata={
             "description": "是否使用沙盒环境",
-            "webui": {"widget": "switch", "group": "connection", "order": 3},
+            "ui": {"widget": "switch", "group": "connection", "order": 3},
         },
     )
 
@@ -50,14 +50,14 @@ class QQBotAdapterConfig:
         default="[1, 30, 25]",
         metadata={
             "description": "订阅的 intents 位列表（JSON格式）",
-            "webui": {"widget": "text", "group": "connection", "order": 1},
+            "ui": {"widget": "text", "group": "connection", "order": 1},
         },
     )
     gateway_url: str = field(
         default="wss://api.sgroup.qq.com/websocket/",
         metadata={
             "description": "WebSocket 网关地址",
-            "webui": {"widget": "text", "group": "connection", "order": 2},
+            "ui": {"widget": "text", "group": "connection", "order": 2},
         },
     )
 
