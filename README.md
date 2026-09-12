@@ -40,7 +40,7 @@ QQBotAdapter 是基于 [ErisPulse](https://github.com/ErisPulse/ErisPulse/) 架�
 |--------------|----------------|
 | C2C_MESSAGE_CREATE | private_message |
 | GROUP_AT_MESSAGE_CREATE | group_message |
-| GROUP_MESSAGE_CREATE | group_message（非@群消息，白名单机器人） |
+| GROUP_MESSAGE_CREATE | group_message（非@群消息，需后台开通接收全部消息权限） |
 | AT_MESSAGE_CREATE | channel_message |
 | MESSAGE_CREATE | channel_message |
 | DIRECT_MESSAGE_CREATE | direct_message |
@@ -268,7 +268,7 @@ async def handle_message(event):
 
 1. 确保在调用 `startup()` 前完成所有处理器的注册
 2. QQBot使用 openid 体系而非QQ号，用户和群的标识均为 openid 字符串
-3. 群消息默认仅在用户@机器人时才会收到（`GROUP_AT_MESSAGE_CREATE`）；白名单机器人可收到全部群消息
+3. 群消息默认仅在用户@机器人时才会收到（`GROUP_AT_MESSAGE_CREATE`）；如需接收全部群消息，请在 [QQ开放平台](https://q.qq.com/) 机器人管理后台开启权限（无API），非@消息将以 `GROUP_MESSAGE_CREATE` 推送
 4. **@检测已支持**：适配器自动为@消息注入机器人 mention 段，`on_at_message()`/`event.is_at_message()` 可直接使用；群空间原始 openid 保留在 mention 段 `data.qqbot_openid`
 5. 发送的消息可能需要经过审核，通过 `qqbot_audit_pass`/`qqbot_audit_reject` 事件通知结果
 6. 媒体文件（图片、视频等）会上传后通过 file_info 发送，支持URL、本地路径和二进制数据；超过5MB自动分片上传

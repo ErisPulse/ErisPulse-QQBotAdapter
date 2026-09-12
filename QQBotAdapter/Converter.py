@@ -163,6 +163,15 @@ class QQBotConverter(BaseConverter):
         # 使框架的 is_at_message()/on_at_message 能正确识别
         if raw_type in ("GROUP_AT_MESSAGE_CREATE", "AT_MESSAGE_CREATE"):
             self._ensure_bot_mention(base_event, message_segments, raw_type)
+        elif raw_type == "GROUP_MESSAGE_CREATE":
+            # 开通"接收全部群消息"后，@消息也可能以该事件推送：
+            # 若 content 中 at 标记命中 bot_id，则识别为@消息
+            self_id = str(self._bot_id_getter() or "") if self._bot_id_getter else ""
+            if self_id and any(
+                seg.get("type") == "mention" and str(seg.get("data", {}).get("user_id", "")) == self_id
+                for seg in message_segments
+            ):
+                base_event["qqbot_is_at_message"] = True
 
         for attachment in raw_event.get("attachments", []) or []:
             message_segments.append(self._attachment_to_segment(attachment))

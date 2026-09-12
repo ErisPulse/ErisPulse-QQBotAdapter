@@ -326,12 +326,13 @@ webhook_path = "/webhook"    # 多 webhook 账户自动追加账户名避免冲�
 ## 事件订阅与 openid 体系
 
 1. QQBot 使用 openid 体系而非QQ号，用户/群标识均为 openid 字符串
-2. 群消息默认仅在用户@机器人时收到（`GROUP_AT_MESSAGE_CREATE`）；白名单机器人可收到全部群消息（`GROUP_MESSAGE_CREATE`）
-3. **@检测**：QQ 的"被@"由事件名承载、content 无 @ 标记，适配器对 `GROUP_AT_MESSAGE_CREATE`/`AT_MESSAGE_CREATE` 自动注入机器人 mention 段，保证 `on_at_message()`/`is_at_message()` 可用；群空间原始 openid 保留在 mention 段的 `data.qqbot_openid`
-4. 被动回复：群/私聊消息需携带 `msg_id` 或 `event_id`，适配器自动缓存并附加
-5. `event_id` 不能与富媒体混发（官方限制），适配器自动降级处理
-6. 发送可能触发审核，结果通过 `qqbot_audit_pass` / `qqbot_audit_reject` 事件通知
-7. 程序退出调用 `shutdown()` 释放资源
+2. 群消息默认仅在用户@机器人时收到（`GROUP_AT_MESSAGE_CREATE`）
+3. **接收全部群消息**：需在 [QQ开放平台](https://q.qq.com/) 机器人管理后台开启相应权限（无API可设置）；开通后非@群消息以 `GROUP_MESSAGE_CREATE` 推送，适配器已完整支持转换（标记 `qqbot_is_at_message=false`；若消息中含@机器人标记则自动识别为@消息）
+4. **@检测**：QQ 的"被@"由事件名承载、content 无 @ 标记，适配器对 `GROUP_AT_MESSAGE_CREATE`/`AT_MESSAGE_CREATE` 自动注入机器人 mention 段，保证 `on_at_message()`/`is_at_message()` 可用；群空间原始 openid 保留在 mention 段的 `data.qqbot_openid`
+5. 被动回复：群/私聊消息需携带 `msg_id` 或 `event_id`，适配器自动缓存并附加
+6. `event_id` 不能与富媒体混发（官方限制），适配器自动降级处理
+7. 发送可能触发审核，结果通过 `qqbot_audit_pass` / `qqbot_audit_reject` 事件通知
+8. 程序退出调用 `shutdown()` 释放资源
 
 ## 错误码说明
 

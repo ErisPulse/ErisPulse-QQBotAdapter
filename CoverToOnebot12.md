@@ -843,7 +843,7 @@ await qqbot.Request(request_id).Using("account2").accept()  # 指定账户
 | GROUP_AT_MESSAGE_CREATE，content 带 `<qqbot-at-user id="X">` | 首个标记归一为机器人（`user_id=bot_id`），原始群空间 openid 保留在 `data.qqbot_openid` |
 | AT_MESSAGE_CREATE，content 无标记 | 同上注入（频道 id 空间与 bot_id 一致） |
 | AT_MESSAGE_CREATE，content 带 `<@!BOT_ID>` | 已匹配，不重复注入 |
-| GROUP_MESSAGE_CREATE（非@群消息） | 不注入，`qqbot_is_at_message=false` |
+| GROUP_MESSAGE_CREATE（非@群消息） | 不注入，`qqbot_is_at_message=false`；若 content 中 at 标记命中 bot_id（开通"接收全部群消息"后可能出现的@消息），自动识别为@消息 |
 | C2C 私聊 | 不注入（私聊本身即定向对话） |
 
 于是模块可以正常使用标准方式检测@：

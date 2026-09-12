@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [ { name = "wsu2059", email = "wsu2059@qq.com" } ]
 dependencies = [
-    "ErisPulse>=2.8.0-dev.1",
+    "ErisPulse>=2.7.1",
     "cryptography>=41.0",
 ]
 
