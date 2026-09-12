@@ -403,6 +403,7 @@ class QQBotAdapter(sdk.BaseAdapter):
             self._reply_message_id = None
             self._at_all = False
             self._keyboard = None
+            self._keyboard_rows = None
 
         def Raw_ob12(self, message, **kwargs):
             """
