@@ -74,6 +74,33 @@ SEGMENT_FILE_TYPES = {
 }
 
 
+def _normalize_qqbot_keyboard(keyboard):
+    """
+    键盘结构归一化：通用标准 rows 结构 → QQBot 原生键盘
+
+    - 通用标准结构（list of list of {label,type,data}）→ {"content": {"rows": [...]}}
+      type: callback→2（点击回传）/ link→0（跳转链接）
+    - 原生结构（dict，如 {"id":..} 或 {"content":{..}}）原样透传（向后兼容）
+    """
+    if not isinstance(keyboard, list):
+        return keyboard
+    try:
+        rows = [
+            [
+                {
+                    "label": b.get("label", ""),
+                    "type": 2 if b.get("type") == "callback" else 0,
+                    "data": b.get("data", ""),
+                }
+                for b in row
+            ]
+            for row in keyboard
+        ]
+        return {"content": {"rows": rows}}
+    except (TypeError, AttributeError):
+        return keyboard
+
+
 @dataclass
 class QQBotConfig(BotAccountConfig):
     """QQBot 账户配置"""
@@ -244,18 +271,27 @@ class QQBotAdapter(sdk.BaseAdapter):
             super().__init__(adapter, target_type, target_id, account_id, rules)
             self._keyboard = None
 
-        def Keyboard(self, keyboard: dict):
+        def Keyboard(self, keyboard):
             """
             附加键盘按钮（自动将消息置为 markdown 类型并附带 bot_appid）
 
-            :param keyboard: 键盘结构（模板键盘 {"id": ...} 或内联键盘 {"content": {"rows": [...]}}）
+            :param keyboard: 兼容三种输入：
+                - 通用标准结构：[[{"label": "..", "type": "callback|link", "data": ".."}]]
+                - 原生内联键盘：{"content": {"rows": [[{...}]]}}
+                - 原生模板键盘：{"id": "..."}
             :return: Send 实例，支持链式调用
 
             :example:
-            >>> await qqbot.Send.To("group", group_openid).Keyboard(keyboard).Text("请选择")
+            >>> rows = [[{"label": "确认", "type": "callback", "data": "ok"}]]
+            >>> await qqbot.Send.To("group", group_openid).Keyboard(rows).Text("请选择")
             """
-            self._keyboard = keyboard
+            self._keyboard = self._normalize_keyboard(keyboard)
             return self
+
+        @staticmethod
+        def _normalize_keyboard(keyboard):
+            """通用 rows 结构 → QQBot 原生键盘；原生结构原样透传（向后兼容）"""
+            return _normalize_qqbot_keyboard(keyboard)
 
         def Markdown(
             self,
@@ -1071,6 +1107,9 @@ class QQBotAdapter(sdk.BaseAdapter):
                 file_name = data.get("filename") or file_name
             elif seg_type == "markdown":
                 markdown_data = data
+            elif seg_type == "keyboard":
+                # 标准 keyboard 段（跨平台通用）→ 平台原生键盘
+                keyboard = self._normalize_keyboard(data.get("rows", data))
             elif seg_type == "ark":
                 ark_data = data
             elif seg_type == "embed":

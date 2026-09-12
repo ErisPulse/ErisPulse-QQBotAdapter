@@ -457,6 +457,9 @@ class QQBotConverter(BaseConverter):
             resolved = (raw_event.get("data", {}) or {}).get("resolved", {}) or {}
             base_event["qqbot_button_id"] = resolved.get("button_id", "")
             base_event["qqbot_button_data"] = resolved.get("button_data", "")
+            # 跨平台交互组件标准字段（见 docs/zh-CN/standards/interactive-components.md）
+            base_event["interaction_id"] = str(raw_event.get("id", ""))
+            base_event["button_data"] = str(resolved.get("button_data") or resolved.get("button_id", ""))
             if resolved.get("message_id"):
                 base_event["message_id"] = resolved.get("message_id", "")
         elif raw_type in ("MESSAGE_AUDIT_PASS", "MESSAGE_AUDIT_REJECT"):
