@@ -15,14 +15,22 @@ class QQBotConverter(BaseConverter):
     - 无法识别的事件返回 type="unknown"（带 warning），不返回 None，保证原始数据不丢失
     """
 
-    # 群/私聊富文本占位
-    _V2_TOKEN_RE = re.compile(r'<qqbot-at-user id="([^"]+)"\s*/?>|<qqbot-at-everyone\s*/?>')
+    # 群/私聊富文本占位（QQ实际同时使用 qqbot-at-user 与 Discord 风格 <@openid> 标记）
+    _V2_TOKEN_RE = re.compile(
+        r'<qqbot-at-user id="(?P<uid>[^"]+)"\s*/?>|(?P<at_all><qqbot-at-everyone\s*/?>)|<@!?(?P<gid>[A-Za-z0-9]+)>'
+    )
     # 频道富文本占位（@ 与 emoji）
     _GUILD_TOKEN_RE = re.compile(r"<@!?(\w+)>|<emoji:(\w+)>")
 
-    def __init__(self, bot_id_getter=None):
+    def __init__(self, bot_id_getter=None, group_openids: Optional[Dict[str, str]] = None, bot_name_getter=None):
         super().__init__(platform="qqbot")
         self._bot_id_getter = bot_id_getter
+        self._bot_name_getter = bot_name_getter
+        self._logger = None
+        # 机器人在各群的 openid（群空间 id 与 READY bot_id 不同体系，需从@消息中学习）
+        # 由适配器持有并共享：{group_openid: bot_member_openid}
+        self._group_openids = group_openids if group_openids is not None else {}
+
         self._event_type_map = {
             # ==================== 消息事件 ====================
             "C2C_MESSAGE_CREATE": ("message", "private"),
@@ -77,6 +85,13 @@ class QQBotConverter(BaseConverter):
             "FORUM_REPLY_DELETE": ("notice", "qqbot_forum_reply_delete"),
             "FORUM_PUBLISH_AUDIT_RESULT": ("notice", "qqbot_forum_audit"),
         }
+
+    def _debug(self, msg: str):
+        if self._logger is not None:
+            try:
+                self._logger.debug(msg)
+            except Exception:
+                pass
 
     def convert(self, raw_event: Dict, ws_event_type: str = "") -> Optional[Dict]:
         if not isinstance(raw_event, dict):
@@ -159,25 +174,68 @@ class QQBotConverter(BaseConverter):
                 },
             })
 
+        # 名称匹配归一化（群消息）：mentions 数组中昵称与机器人自身名（/users/@me username）
+        # 一致时，认定为@机器人：归一化 mention 段为 bot_id 并学习该群 openid。
+        # 背景："接收全部群消息"模式下所有消息（含@）均以 GROUP_MESSAGE_CREATE 推送，
+        # GROUP_AT 不可达；且群空间 openid 与 READY bot_id 不同 id 体系无法对账，
+        # 名称匹配是识别 @机器人 的可靠手段。
+        if raw_type in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
+            self._normalize_bot_mention_by_name(raw_event, base_event, message_segments)
+        # 机器人自身群 openid 学习：定义上就是@的事件中，mentions[0]/首个标记即机器人
+        # （群空间 openid 与 READY bot_id 不同体系，学习后用于"接收全部群消息"模式的@识别）
+        if raw_type == "GROUP_AT_MESSAGE_CREATE" and self._group_openids is not None:
+            gid = raw_event.get("group_openid", "")
+            if gid and gid not in self._group_openids:
+                mentions = raw_event.get("mentions", []) or []
+                candidate = str(mentions[0].get("id", "")) if mentions and mentions[0].get("id") else ""
+                if not candidate:
+                    for seg in message_segments:
+                        if seg.get("type") == "mention" and seg.get("data", {}).get("user_id"):
+                            candidate = str(seg["data"]["user_id"])
+                            break
+                if candidate:
+                    self._group_openids[gid] = candidate
+
         # "定义上就是@机器人"的事件：保证存在机器人自身的 mention 段，
         # 使框架的 is_at_message()/on_at_message 能正确识别
         if raw_type in ("GROUP_AT_MESSAGE_CREATE", "AT_MESSAGE_CREATE"):
             self._ensure_bot_mention(base_event, message_segments, raw_type)
         elif raw_type == "GROUP_MESSAGE_CREATE":
-            # 开通"接收全部群消息"后，@消息也可能以该事件推送：
-            # 若 content 中 at 标记命中 bot_id，则识别为@消息
+            # 开通"接收全部群消息"后，@消息以该事件推送；
+            # at 标记命中 bot_id 或已学习的机器人群 openid 时识别为@消息
             self_id = str(self._bot_id_getter() or "") if self._bot_id_getter else ""
-            if self_id and any(
-                seg.get("type") == "mention" and str(seg.get("data", {}).get("user_id", "")) == self_id
-                for seg in message_segments
-            ):
-                base_event["qqbot_is_at_message"] = True
+            gid = raw_event.get("group_openid", "")
+            learned = self._group_openids.get(gid, "") if gid else ""
+            matched = False
+            for seg in message_segments:
+                if seg.get("type") != "mention":
+                    continue
+                seg_id = str(seg.get("data", {}).get("user_id", ""))
+                if (self_id and seg_id == self_id) or (learned and seg_id == learned):
+                    base_event["qqbot_is_at_message"] = True
+                    matched = True
+                    if learned and seg_id == learned and self_id:
+                        # 归一化为 bot_id，使框架 on_at_message 检测生效
+                        seg["data"]["user_id"] = self_id
+                        seg["data"]["qqbot_openid"] = learned
+                    break
+            if not matched:
+                self._debug(
+                    f"[at检测] GROUP_MESSAGE_CREATE 未识别为@消息: bot_id={self_id!r}, "
+                    f"learned_openid={learned!r}, "
+                    f"mention_ids={[s.get('data', {}).get('user_id') for s in message_segments if s.get('type') == 'mention']}"
+                )
 
         for attachment in raw_event.get("attachments", []) or []:
             message_segments.append(self._attachment_to_segment(attachment))
 
         base_event["message"] = message_segments
         base_event["alt_message"] = self._generate_alt_message(message_segments)
+        self._debug(
+            f"[at检测] {raw_type} -> type={base_event['type']}/{base_event['detail_type']}, "
+            f"is_at={base_event.get('qqbot_is_at_message', 'N/A')}, "
+            f"segments={[s['type'] for s in message_segments]}"
+        )
         return base_event
 
     def _parse_content(self, raw_event: Dict, raw_type: str) -> List[Dict]:
@@ -197,8 +255,9 @@ class QQBotConverter(BaseConverter):
                 elif match.group(2) is not None:
                     segments.append({"type": "face", "data": {"id": match.group(2)}})
             else:
-                if match.group(0).startswith("<qqbot-at-user"):
-                    segments.append({"type": "mention", "data": {"user_id": match.group(1)}})
+                if match.group("uid") is not None or match.group("gid") is not None:
+                    uid = match.group("uid") if match.group("uid") is not None else match.group("gid")
+                    segments.append({"type": "mention", "data": {"user_id": uid}})
                 else:
                     segments.append({"type": "mention_all", "data": {}})
             pos = match.end()
@@ -225,6 +284,52 @@ class QQBotConverter(BaseConverter):
             "data": {"url": url, "qqbot_attachment": attachment},
         }
 
+    def _normalize_bot_mention_by_name(self, raw_event: Dict, base_event: Dict, segments: List[Dict]):
+        """
+        按名称归一化机器人 mention 段（群消息）
+
+        mentions 数组中昵称与机器人自身名一致时：
+        - mention 段 user_id 归一化为 bot_id（原始群空间 openid 保留到 qqbot_openid）
+        - 标记 qqbot_is_at_message=True（使框架 mention 检测/事件标记生效）
+        - 学习该群的机器人 openid（供后续无昵称标记的消息对账）
+        """
+        bot_name = str(self._bot_name_getter() or "") if self._bot_name_getter else ""
+        if not bot_name:
+            return
+        self_id = str(self._bot_id_getter() or "") if self._bot_id_getter else ""
+
+        matched = False
+        for seg in segments:
+            if seg.get("type") != "mention":
+                continue
+            if str(seg.get("data", {}).get("user_name", "")) != bot_name:
+                continue
+            matched = True
+            original_id = str(seg.get("data", {}).get("user_id", ""))
+            if self_id:
+                seg["data"]["user_id"] = self_id
+            if original_id:
+                seg["data"]["qqbot_openid"] = original_id
+                gid = raw_event.get("group_openid", "")
+                if gid and self._group_openids is not None:
+                    self._group_openids[gid] = original_id
+        if matched:
+            base_event["qqbot_is_at_message"] = True
+            self._debug(
+                f"[at检测] 名称归一化命中: bot_name={bot_name!r} -> bot_id={self_id!r}, "
+                f"已学习群openid: {dict(self._group_openids)}"
+            )
+        else:
+            mention_names = [
+                s.get("data", {}).get("user_name")
+                for s in segments
+                if s.get("type") == "mention" and s.get("data", {}).get("user_name")
+            ]
+            if mention_names:
+                self._debug(
+                    f"[at检测] 名称归一化未命中: bot_name={bot_name!r}, mentions中的昵称={mention_names}"
+                )
+
     def _ensure_bot_mention(self, base_event: Dict, segments: List[Dict], raw_type: str):
         """
         保证消息中存在机器人自身的 mention 段
@@ -235,17 +340,31 @@ class QQBotConverter(BaseConverter):
         因此对定义上就是@消息的事件，转换时补齐机器人 mention 段：
 
         - 已有 mention 段且 id 与 bot_id 一致 → 无需处理
+        - 群消息含 @ 标记且命中已学习的机器人群 openid → 归一化为 bot_id
         - 群消息含其他 @ 标记 → 首个标记视为机器人（群空间 openid 保留到 qqbot_openid）
         - 无任何标记 → 前置注入 mention(bot_id)
         """
         self_id = str(self._bot_id_getter() or "") if self._bot_id_getter else ""
         base_event["qqbot_is_at_message"] = True
         if not self_id:
+            self._debug("[at检测] bot_id 为空，跳过机器人 mention 注入")
             return
 
         for seg in segments:
             if seg.get("type") == "mention" and str(seg.get("data", {}).get("user_id", "")) == self_id:
+                self._debug("[at检测] 事件自带 bot mention，无需注入")
                 return
+
+        gid = base_event.get("qqbot_group_openid") or base_event.get("group_id", "")
+        learned = self._group_openids.get(gid, "") if gid else ""
+        if learned:
+            for seg in segments:
+                if seg.get("type") == "mention" and str(seg.get("data", {}).get("user_id", "")) == learned:
+                    seg["data"]["user_id"] = self_id
+                    if learned != self_id:
+                        seg["data"]["qqbot_openid"] = learned
+                    self._debug(f"[at检测] 已学习 openid 归一化: {learned!r} -> bot_id={self_id!r}")
+                    return
 
         at_indexes = [i for i, seg in enumerate(segments) if seg.get("type") == "mention"]
         if at_indexes and raw_type == "GROUP_AT_MESSAGE_CREATE":
@@ -256,9 +375,11 @@ class QQBotConverter(BaseConverter):
             seg["data"]["user_id"] = self_id
             if original_id and original_id != self_id:
                 seg["data"]["qqbot_openid"] = original_id
+            self._debug(f"[at检测] GROUP_AT 首个标记归一化为机器人: {original_id!r} -> {self_id!r}")
             return
 
         segments.insert(0, {"type": "mention", "data": {"user_id": self_id}})
+        self._debug(f"[at检测] 注入机器人 mention 段: bot_id={self_id!r}")
 
     # ==================== 请求事件 ====================
 

@@ -28,6 +28,9 @@ except ImportError:  # pragma: no cover
 
 __version__ = "5.0.0"
 
+# 软依赖的框架最低版本（运行时检测，仅提示不强制）
+MIN_FRAMEWORK_VERSION = (2, 7, 1)
+
 DEFAULT_API_BASE_URL = "https://api.bot.qq.com"
 DEFAULT_ACCESS_TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 FALLBACK_GATEWAY_URL = "wss://api.sgroup.qq.com/websocket/"
@@ -608,15 +611,55 @@ class QQBotAdapter(sdk.BaseAdapter):
     def __init__(self, sdk_instance=None):
         super().__init__(sdk_instance)
         self.bot_id = ""
+        self._bot_name = ""
         self._runtimes: Dict[str, _AccountRuntime] = {}
         self._account_tasks: Dict[str, asyncio.Task] = {}
         self._message_targets: Dict[str, Tuple[str, str]] = {}
         self._pending_msg_ids: Dict[str, str] = {}
         self._pending_requests: Dict[str, dict] = {}
+        self._bot_group_openids: Dict[str, str] = {}
         self._sandbox_warned = False
 
-        converter = QQBotConverter(bot_id_getter=lambda: self.bot_id)
+        converter = QQBotConverter(
+            bot_id_getter=lambda: self.bot_id,
+            group_openids=self._bot_group_openids,
+            bot_name_getter=lambda: self._bot_name,
+        )
+        converter._logger = self._get_logger()
         self.convert = converter.convert
+
+        self._check_framework_version()
+        self._get_logger().info(f"QQBotAdapter v{__version__} 已加载")
+
+    @staticmethod
+    def _parse_version(version_str: str) -> tuple:
+        """解析版本号为可比较的三元组（忽略 dev/预发布后缀，如 2.8.0-dev.3 → (2, 8, 0)）"""
+        parts = []
+        for piece in str(version_str).split("."):
+            digits = "".join(ch for ch in piece if ch.isdigit())
+            parts.append(int(digits) if digits else 0)
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts[:3])
+
+    def _check_framework_version(self):
+        """软依赖检测：框架版本过低时打警告（不阻断加载）"""
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            raw = _pkg_version("ErisPulse")
+        except Exception:
+            return
+        try:
+            if self._parse_version(raw) < MIN_FRAMEWORK_VERSION:
+                self._get_logger().warning(
+                    f"当前 ErisPulse 版本 {raw} 过低：QQBotAdapter v5 需要 >= "
+                    f"{'.'.join(map(str, MIN_FRAMEWORK_VERSION))}"
+                    "（BaseConverter / Api/Request DSL / spawn_background 等特性），"
+                    "部分功能可能不可用，建议升级框架"
+                )
+        except Exception:
+            pass
 
         self._migrate_legacy_config()
 
@@ -736,6 +779,8 @@ class QQBotAdapter(sdk.BaseAdapter):
             rt.user_name = u.get("username", "")
             if not self.bot_id:
                 self.bot_id = rt.bot_id
+            if not self._bot_name:
+                self._bot_name = rt.user_name
             if hasattr(rt.config, "bot_id"):
                 try:
                     rt.config.bot_id = rt.bot_id
@@ -1426,6 +1471,13 @@ class QQBotAdapter(sdk.BaseAdapter):
         event_type = event.get("type")
         if event_type == "message":
             self._store_event_msg_id(event)
+            if event.get("detail_type") == "group":
+                self._get_logger().debug(
+                    f"[at检测] 群消息事件: raw_type={event.get('qqbot_raw_type')}, "
+                    f"is_at={event.get('qqbot_is_at_message')}, "
+                    f"self.user_id={self_info.get('user_id')!r}, "
+                    f"mentions={[s.get('data', {}).get('user_id') for s in event.get('message', []) if s.get('type') == 'mention']}"
+                )
         elif event_type == "request":
             self._register_request(event, account_name)
         if event_type == "unknown":

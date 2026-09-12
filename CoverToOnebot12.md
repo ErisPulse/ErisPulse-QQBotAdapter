@@ -839,12 +839,21 @@ await qqbot.Request(request_id).Using("account2").accept()  # 指定账户
 
 | 场景 | 转换行为 |
 |------|---------|
+| content 带 `<@{openid}>` / `<qqbot-at-user>` 标记 | 均解析为 mention 段（QQ实际同时使用两种标记风格） |
 | GROUP_AT_MESSAGE_CREATE，content 无标记 | 前置注入 `{"type": "mention", "data": {"user_id": bot_id}}` |
-| GROUP_AT_MESSAGE_CREATE，content 带 `<qqbot-at-user id="X">` | 首个标记归一为机器人（`user_id=bot_id`），原始群空间 openid 保留在 `data.qqbot_openid` |
+| GROUP_AT_MESSAGE_CREATE，content 带机器人标记 | 标记归一为机器人（`user_id=bot_id`），原始群空间 openid 保留在 `data.qqbot_openid` |
 | AT_MESSAGE_CREATE，content 无标记 | 同上注入（频道 id 空间与 bot_id 一致） |
 | AT_MESSAGE_CREATE，content 带 `<@!BOT_ID>` | 已匹配，不重复注入 |
-| GROUP_MESSAGE_CREATE（非@群消息） | 不注入，`qqbot_is_at_message=false`；若 content 中 at 标记命中 bot_id（开通"接收全部群消息"后可能出现的@消息），自动识别为@消息 |
+| GROUP_MESSAGE_CREATE（非@群消息） | 不注入，`qqbot_is_at_message=false` |
+| GROUP_MESSAGE_CREATE 含 @机器人标记 | 识别为@消息：标记命中 bot_id、已学习的机器人群 openid，**或 mentions 昵称与机器人名一致**（名称归一化，主机制） |
 | C2C 私聊 | 不注入（私聊本身即定向对话） |
+
+> **"接收全部群消息"模式说明**：开启该权限后，所有群消息（**包括@机器人的**）均以
+> `GROUP_MESSAGE_CREATE` 推送，`GROUP_AT_MESSAGE_CREATE` 不会到达；且 mention 标记
+> 中的群空间 openid 与 READY 返回的 bot_id **不在同一 id 体系**，无法直接对账。
+> 适配器通过**名称归一化**解决：`/users/@me` 返回的机器人名与 mentions 数组昵称一致时，
+> 认定为@机器人——mention 段归一化为 bot_id（原始 openid 保留在 `data.qqbot_openid`），
+> 同时学习该群 openid 供后续仅含标记的消息对账。名称匹配要求机器人未被改名（与开放平台注册名一致）。
 
 于是模块可以正常使用标准方式检测@：
 
