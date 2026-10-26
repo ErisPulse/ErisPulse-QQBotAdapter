@@ -553,7 +553,13 @@ class QQBotConverter(BaseConverter):
             elif seg_type == "file":
                 parts.append("[文件]")
             elif seg_type in ("at", "mention"):
-                parts.append(f"@{data.get('user_name', data.get('user_id', ''))}")
+                # 昵称缺失回退 user_id，两者皆缺省略该段（不输出空 "@"）
+                user_id = str(data.get("user_id") or "").strip()
+                user_name = str(data.get("user_name") or "").strip()
+                if user_name:
+                    parts.append(f"@{user_name}")
+                elif user_id:
+                    parts.append(f"@{user_id}")
             elif seg_type == "mention_all":
                 parts.append("@全体成员")
             elif seg_type == "reply":
