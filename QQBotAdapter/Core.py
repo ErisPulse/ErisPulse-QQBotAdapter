@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ErisPulse import sdk
 from ErisPulse.Core import client
+from .QrConnect import QrConnectSession, BindStatus
 from ErisPulse.Core.Bases import BaseConfig, BotAccountConfig
 from ErisPulse.Core.Bases.errors import (
     ClientConnectionError,
@@ -886,6 +887,206 @@ class QQBotAdapter(sdk.BaseAdapter):
             self._account_tasks[name] = task
 
         self.logger.info(f"QQBot 适配器已启动，共 {len(usable)} 个账户")
+        self._setup_qr_access()
+
+    # ==================== 扫码一键接入 ====================
+
+    def _setup_qr_access(self):
+        """注册扫码接入端点与面板扩展区（失败静默，不影响主流程）"""
+        try:
+            from ErisPulse.Core import router
+
+            self._qr_sessions: Dict[str, dict] = {}
+
+            async def _qr_start(request):
+                import secrets as _secrets
+
+                sess = QrConnectSession(source="ErisPulse")
+                url = await sess.start()
+                # 纯 Python 生成二维码 SVG（qrcode 库矩阵 + 手绘）
+                import qrcode as _qrcode
+
+                qr = _qrcode.QRCode(border=2, error_correction=_qrcode.constants.ERROR_CORRECT_M)
+                qr.add_data(url)
+                qr.make(fit=True)
+                m = qr.get_matrix()
+                n = len(m)
+                parts = []
+                for y, row in enumerate(m):
+                    for x, on in enumerate(row):
+                        if on:
+                            parts.append(f'M{x} {y}h1v1h-1z')
+                svg = (
+                    f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n} {n}" '
+                    f'shape-rendering="crispEdges" width="240" height="240">'
+                    f'<rect width="{n}" height="{n}" fill="#fff"/>'
+                    f'<path d="{"".join(parts)}" fill="#111"/></svg>'
+                )
+                poll_token = _secrets.token_urlsafe(24)
+                self._qr_sessions[sess.task_id] = {"sess": sess, "token": poll_token}
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "task_id": sess.task_id,
+                        "poll_token": poll_token,
+                        "url": url,
+                        "qr_svg": svg,
+                    }
+                )
+
+            async def _qr_poll(request):
+                from fastapi.responses import JSONResponse
+
+                body = {}
+                try:
+                    body = await request.json()
+                except Exception:
+                    pass
+                task_id = str(body.get("task_id") or "")
+                token = str(body.get("poll_token") or "")
+                entry = self._qr_sessions.get(task_id)
+                if not entry or entry["token"] != token:
+                    return JSONResponse({"success": False, "error": "unauthorized"}, status_code=403)
+                try:
+                    r = await entry["sess"].poll()
+                except Exception as e:
+                    return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+                status = r["status"]
+                out = {"success": True, "status": status}
+                if status == BindStatus.COMPLETED:
+                    # 写入账户配置（qr / qr2 / qr3…取首个可用名）
+                    from ErisPulse.Core import config as _cfg
+
+                    key = "QQBot_Adapter.accounts"
+                    data = _cfg.getConfig(key) or {}
+                    if not isinstance(data, dict):
+                        data = {}
+                    base = "qr"
+                    name = base
+                    i = 1
+                    while name in data and (data[name].get("appid") != r.get("appid")):
+                        i += 1
+                        name = f"{base}{i}"
+                    data[name] = {
+                        "appid": r.get("appid", ""),
+                        "secret": r.get("secret", ""),
+                        "mode": "websocket",
+                        "enabled": True,
+                    }
+                    _cfg.setConfig(key, data)
+                    self._qr_sessions.pop(task_id, None)
+                    out["account"] = name
+                    self.logger.info(f"扫码接入完成，已写入账户 {name}")
+                elif status == BindStatus.EXPIRED:
+                    self._qr_sessions.pop(task_id, None)
+                return JSONResponse(out)
+
+            router.register_http_route("qqbot", "/qr/start", _qr_start, methods=["POST"])
+            router.register_http_route("qqbot", "/qr/poll", _qr_poll, methods=["POST"])
+            self.logger.debug("扫码接入端点已注册 (/qqbot/qr/*)")
+        except Exception as e:
+            self.logger.debug(f"扫码接入端点注册跳过: {e}")
+
+        self._setup_dashboard_section()
+
+    def _setup_dashboard_section(self):
+        """向面板注册「账户添加向导」的扫码扩展区（面板可用时）"""
+
+        def _register():
+            try:
+                dashboard = sdk.Dashboard
+            except Exception:
+                return False
+            try:
+                dashboard.register_section(
+                    id="qqbot-qr",
+                    target="account_wizard",
+                    title="扫码一键接入",
+                    title_en="Scan QR to connect",
+                    icon_svg='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v.01M14 21v.01M17.5 17.5L21 21"/></svg>',
+                    platforms=["qqbot"],
+                    html=self._qr_section_html(),
+                    order=10,
+                )
+                self.logger.info("已注册面板扫码接入扩展区")
+                return True
+            except Exception as e:
+                self.logger.debug(f"面板扩展区注册失败: {e}")
+                return False
+
+        if _register():
+            return
+
+        async def _on_module_load(data):
+            if (
+                isinstance(data, dict)
+                and data.get("module_name") == "Dashboard"
+                and data.get("success")
+            ):
+                _register()
+                sdk.lifecycle.unregister("module.load", _on_module_load)
+
+        async def _on_init_complete(data):
+            _register()
+            sdk.lifecycle.unregister("core.init.complete", _on_init_complete)
+
+        try:
+            sdk.lifecycle.register("module.load", _on_module_load)
+            sdk.lifecycle.register("core.init.complete", _on_init_complete)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _qr_section_html() -> str:
+        return '''<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:light dark}
+body{margin:0;padding:18px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:transparent;color:inherit;display:flex;flex-direction:column;align-items:center;gap:12px}
+#qr{border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px rgba(128,128,128,.25)}
+.st{font-size:13px;opacity:.75;text-align:center}
+.ok{color:#16a34a;font-weight:600}
+button{padding:8px 18px;border-radius:10px;border:1px solid rgba(128,128,128,.4);background:transparent;cursor:pointer;font-size:13px}
+</style></head><body>
+<div id="qr"></div>
+<div class="st" id="st">正在获取二维码…</div>
+<button id="re" style="display:none" onclick="location.reload()">重新获取</button>
+<script>
+(async function(){
+  try{
+    var r = await fetch("/qqbot/qr/start", {method:"POST"});
+    var d = await r.json();
+    if(!d.success) throw new Error(d.error || "start failed");
+    document.getElementById("qr").innerHTML = d.qr_svg;
+    document.getElementById("st").textContent = "请使用手机 QQ 扫码，选择要接入的机器人";
+    var taskId = d.task_id, token = d.poll_token;
+    var n = 0;
+    var timer = setInterval(async function(){
+      n++;
+      if(n > 90){ clearInterval(timer); document.getElementById("st").textContent="二维码已过期"; document.getElementById("re").style.display=""; return; }
+      try{
+        var pr = await fetch("/qqbot/qr/poll", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({task_id:taskId, poll_token:token})});
+        var pd = await pr.json();
+        if(pd.success && pd.status === 2){
+          clearInterval(timer);
+          document.getElementById("st").className = "st ok";
+          document.getElementById("st").textContent = "已接入账户 " + (pd.account || "");
+          setTimeout(function(){ parent.postMessage({type:"ep_section_done", success:true}, "*"); }, 900);
+        } else if(pd.success && pd.status === 3){
+          clearInterval(timer);
+          document.getElementById("st").textContent = "二维码已过期";
+          document.getElementById("re").style.display="";
+        }
+      }catch(e){}
+    }, 2000);
+  }catch(e){
+    document.getElementById("st").textContent = "获取二维码失败: " + e.message;
+    document.getElementById("re").style.display="";
+  }
+})();
+</script></body></html>'''
 
     async def shutdown(self):
         for rt in list(self._runtimes.values()):
