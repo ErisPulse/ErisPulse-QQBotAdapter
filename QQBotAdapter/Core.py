@@ -246,7 +246,13 @@ class QQBotConfig(BotAccountConfig):
         default="/webhook",
         metadata={
             "description": "Webhook 模式的回调路径（mode=webhook 时生效）",
-            "ui": {"widget": "text", "group": "connection", "order": 7},
+            "ui": {
+                "widget": "text",
+                "group": "connection",
+                "order": 7,
+                # 满血组件绑定：仅 webhook 模式显示（旧面板未透传时忽略，始终显示）
+                "show_if": {"field": "mode", "op": "eq", "value": "webhook"},
+            },
         },
     )
     bot_id: str = field(
