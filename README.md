@@ -170,7 +170,7 @@ async def handle_join(event):
 ```toml
 # config.toml
 [QQBot_Adapter]
-intents = "[0, 9, 12, 25, 26, 27]"    # 订阅的事件 intents（JSON数组，支持事件名）
+intents = "[0, 25]"                  # 订阅的事件 intents（默认最小权限：频道基础+群/单聊消息；Dashboard 中可视化勾选）
 
 [QQBot_Adapter.accounts.default]
 appid = "YOUR_APPID"                  # QQ机器人应用ID（必填）
@@ -186,7 +186,7 @@ enabled = true
 **配置项说明：**
 - `appid` / `secret`：从 [QQ开放平台](https://q.qq.com/) 获取（必填）
 - `mode`：事件接收方式，`websocket`（默认，长连接）或 `webhook`（HTTP 回调 + Ed25519 验签）
-- `intents`：事件订阅，支持位序号或事件名，常用：`0` 频道 / `9,30` 频道消息 / `12` 频道私信 / `24` 群成员 / `25` 群私聊 / `26` 交互 / `27` 审核
+- `intents`：事件订阅，默认最小权限 `[0, 25]`。**只订阅机器人已开通的权限**——订阅未开通的 intent 会被网关拒绝（op 9 会话无效，适配器会自动降级到最小权限并留痕）。常用位：`0` 频道 / `9,30` 频道消息（9 为私域）/ `12` 频道私信 / `24` 群成员 / `25` 群单聊（需开通群聊能力）/ `26` 交互 / `27` 审核（私域）
 - `gateway_url`：WebSocket 网关地址，留空时通过 `/gateway/bot` 动态获取（支持代理/私有部署）
 - `api_base_url`：OpenAPI 根地址，默认 `https://api.bot.qq.com`
 - 多账户：在 `accounts` 下添加多个账户即可并行接入（可混合 websocket/webhook 模式）

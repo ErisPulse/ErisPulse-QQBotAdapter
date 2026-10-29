@@ -5,6 +5,10 @@ from typing import Optional
 from ErisPulse.Core import client
 from ErisPulse.Core.Bases.websocket import WSMessage
 
+# 最小权限：GUILDS(0) + GROUP_AND_C2C_EVENT(25)。Core 侧 DEFAULT_INTENTS 与之对应
+# （不能顶层 from .Core import：Core 顶层导入本模块，会循环）
+MINIMAL_INTENTS_VALUE = (1 << 0) | (1 << 25)
+
 
 class QQBotWebSocket:
     """QQ官方机器人 WebSocket 网关客户端（每账户一个实例，自动重连/恢复会话）"""
@@ -35,6 +39,8 @@ class QQBotWebSocket:
         self._connected = False
         self._closing = False
         self._reconnect_count = 0
+        self._intents_degraded = False
+        self._last_sent_op: Optional[int] = None
 
     @property
     def connected(self) -> bool:
@@ -113,15 +119,21 @@ class QQBotWebSocket:
 
     async def _identify(self):
         token = await self.adapter._ensure_token(self.rt)
+        intents = (
+            MINIMAL_INTENTS_VALUE
+            if self._intents_degraded
+            else self.adapter._get_intents_value()
+        )
         payload = {
             "op": self.OP_IDENTIFY,
             "d": {
                 "token": f"QQBot {token}",
-                "intents": self.adapter._get_intents_value(),
+                "intents": intents,
                 "shard": [0, 1],
             },
         }
         await self.ws.send_json(payload)
+        self._last_sent_op = self.OP_IDENTIFY
         self.adapter.logger.info(f"账户 {self.name} 已发送 Identify")
 
     async def _resume(self):
@@ -135,6 +147,7 @@ class QQBotWebSocket:
             },
         }
         await self.ws.send_json(payload)
+        self._last_sent_op = self.OP_RESUME
         self.adapter.logger.info(f"账户 {self.name} 已发送 Resume (seq={self.seq})")
 
     async def _heartbeat_loop(self):
@@ -220,7 +233,28 @@ class QQBotWebSocket:
             await self._close_ws()
 
         elif op == self.OP_INVALID_SESSION:
-            self.adapter.logger.warning(f"账户 {self.name} 会话无效，将重新 Identify")
+            if self._last_sent_op == self.OP_IDENTIFY and not self._intents_degraded:
+                current = self.adapter._get_intents_value()
+                if current & ~MINIMAL_INTENTS_VALUE:
+                    # Identify 被拒且配置了最小权限之外的 intents：自动降级重连
+                    self._intents_degraded = True
+                    self.adapter.logger.warning(
+                        f"账户 {self.name} 会话无效（op 9）：订阅的 intents 疑似包含未开通权限，"
+                        f"已自动降级为最小权限 [0, 25] 重连。"
+                        "请到 QQ 开放平台「能力管理」核对后修改 QQBot_Adapter.intents 并重启以恢复完整事件"
+                    )
+                else:
+                    self.adapter.logger.warning(
+                        f"账户 {self.name} 会话无效（op 9）：已是最小权限，非 intents 问题，"
+                        "请检查机器人审核状态与 token 权限"
+                    )
+            elif self._intents_degraded:
+                self.adapter.logger.warning(
+                    f"账户 {self.name} 会话无效（op 9）：最小权限仍被拒绝，非 intents 问题，"
+                    "请检查机器人审核状态与 token 权限"
+                )
+            else:
+                self.adapter.logger.warning(f"账户 {self.name} 会话无效，将重新 Identify")
             self.session_id = None
             self.seq = None
             await self._close_ws()

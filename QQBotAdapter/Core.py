@@ -107,7 +107,7 @@ try:
 except ImportError:  # pragma: no cover
     spawn_background = None
 
-__version__ = "5.1.1"
+__version__ = "5.2.0"
 
 # 软依赖的框架最低版本（运行时检测，仅提示不强制）
 MIN_FRAMEWORK_VERSION = (2, 7, 1)
@@ -136,7 +136,10 @@ INTENT_BITS = {
     "PUBLIC_GUILD_MESSAGES": 30,
 }
 
-DEFAULT_INTENTS = "[0, 9, 12, 25, 26, 27]"
+# 默认最小权限：GUILDS(0) 所有机器人可用 + GROUP_AND_C2C_EVENT(25) 群/单聊核心事件
+# 订阅未开通权限的 intent 会导致网关返回 op 9（Invalid Session）并无限重连
+# （WebSocket.MINIMAL_INTENTS_VALUE 为对应掩码，op 9 自动降级用）
+DEFAULT_INTENTS = "[0, 25]"
 
 DEFAULT_FILE_NAMES = {1: "image.png", 2: "video.mp4", 3: "audio.silk", 4: "file.bin"}
 
@@ -262,6 +265,22 @@ class QQBotConfig(BotAccountConfig):
     )
 
 
+INTENT_OPTIONS = [
+    {"label": "0 GUILDS - 频道基础事件（所有机器人可用）", "value": 0},
+    {"label": "1 GUILD_MEMBERS - 频道成员事件（私域）", "value": 1},
+    {"label": "9 GUILD_MESSAGES - 频道消息事件（私域）", "value": 9},
+    {"label": "10 GUILD_MESSAGE_REACTIONS - 频道消息表态", "value": 10},
+    {"label": "12 DIRECT_MESSAGE - 频道私聊消息（需申请）", "value": 12},
+    {"label": "24 GROUP_MEMBER - 群成员事件", "value": 24},
+    {"label": "25 GROUP_AND_C2C_EVENT - 群聊/单聊消息（需开通群聊能力）", "value": 25},
+    {"label": "26 INTERACTION - 互动事件（按钮/回传，需开通）", "value": 26},
+    {"label": "27 MESSAGE_AUDIT - 消息审核事件（私域）", "value": 27},
+    {"label": "28 FORUMS_EVENT - 论坛事件（私域）", "value": 28},
+    {"label": "29 AUDIO_ACTION - 音频事件", "value": 29},
+    {"label": "30 PUBLIC_GUILD_MESSAGES - 公域频道消息事件", "value": 30},
+]
+
+
 @dataclass
 class QQBotAdapterConfig(BaseConfig):
     """QQBot 适配器全局配置"""
@@ -270,10 +289,17 @@ class QQBotAdapterConfig(BaseConfig):
         default=DEFAULT_INTENTS,
         metadata={
             "description": (
-                "订阅的 intents（JSON数组）：支持事件位序号（如 25）或事件名（如 \"GROUP_AND_C2C_EVENT\"）。"
-                "常用位：0=GUILDS 9=GUILD_MESSAGES 12=DIRECT_MESSAGE 24=GROUP_MEMBER 25=群/私聊 26=INTERACTION 27=MESSAGE_AUDIT"
+                "订阅的事件 intents（JSON数组）。注意：订阅未开通权限的 intent 会被网关拒绝"
+                "（op 9 会话无效），请只勾选 QQ 开放平台「能力管理」中已开通的权限。"
+                "默认最小权限 [0, 25]：频道基础 + 群聊/单聊消息。"
+                "也支持事件名（如 \"GROUP_AND_C2C_EVENT\"）。"
             ),
-            "ui": {"widget": "text", "group": "connection", "order": 1},
+            "ui": {
+                "widget": "multiselect",
+                "group": "connection",
+                "order": 1,
+                "options": INTENT_OPTIONS,
+            },
         },
     )
 
@@ -1692,7 +1718,7 @@ class QQBotAdapter(sdk.BaseAdapter):
         try:
             items = json.loads(raw) if isinstance(raw, str) else list(raw or [])
         except Exception:
-            items = [0, 9, 12, 25, 26, 27]
+            items = json.loads(DEFAULT_INTENTS)
 
         value = 0
         for item in items:
