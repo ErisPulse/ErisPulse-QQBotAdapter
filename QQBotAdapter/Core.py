@@ -107,7 +107,7 @@ try:
 except ImportError:  # pragma: no cover
     spawn_background = None
 
-__version__ = "5.2.0"
+__version__ = "5.2.1"
 
 # 软依赖的框架最低版本（运行时检测，仅提示不强制）
 MIN_FRAMEWORK_VERSION = (2, 7, 1)
@@ -561,18 +561,21 @@ class QQBotAdapter(sdk.BaseAdapter):
             async def _do():
                 try:
                     # node 段解析：纯 node 列表自动路由合并转发；混合列表降级为纯文本
-                    if message and all(
+                    # 注意：内层不能对 message 赋值（会遮蔽外层参数成局部变量，
+                    # 首次引用即 UnboundLocalError），统一改用 segs 别名
+                    segs = message
+                    if segs and all(
                         isinstance(seg, dict) and seg.get("type") == "node"
-                        for seg in message
+                        for seg in segs
                     ):
-                        return await self._do_send_merge_forward(message)
-                    message = [
+                        return await self._do_send_merge_forward(segs)
+                    segs = [
                         {"type": "text", "data": {"text": _forward_nodes_plain(seg)}}
                         if isinstance(seg, dict) and seg.get("type") == "node"
                         else seg
-                        for seg in message
+                        for seg in segs
                     ]
-                    segments = self._apply_modifiers(message)
+                    segments = self._apply_modifiers(segs)
                     ctx = self.send_context
                     return await self._adapter._send_segments(
                         segments,
