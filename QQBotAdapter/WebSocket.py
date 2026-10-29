@@ -66,9 +66,6 @@ class QQBotWebSocket:
                 break
 
     async def _resolve_gateway(self) -> str:
-        cfg = self.rt.config
-        if cfg.gateway_url:
-            return cfg.gateway_url
         result = await self.adapter._request("GET", "/gateway/bot", account_id=self.name)
         if result.get("status") == "ok" and isinstance(result.get("data"), dict):
             url = result["data"].get("url", "")

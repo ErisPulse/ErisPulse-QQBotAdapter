@@ -176,10 +176,8 @@ intents = "[0, 25]"                  # 订阅的事件 intents（默认最小权
 appid = "YOUR_APPID"                  # QQ机器人应用ID（必填）
 secret = "YOUR_CLIENT_SECRET"         # QQ机器人客户端密钥（必填）
 mode = "websocket"                    # websocket / webhook
+webhook_path = "/webhook"             # mode=webhook 时生效（Dashboard 中仅 webhook 模式显示）
 bot_id = ""                           # 留空自动获取（可手动填写用于 Using() 定位）
-gateway_url = ""                      # WebSocket网关（留空动态获取）
-api_base_url = "https://api.bot.qq.com"
-webhook_path = "/webhook"             # mode=webhook 时生效
 enabled = true
 ```
 

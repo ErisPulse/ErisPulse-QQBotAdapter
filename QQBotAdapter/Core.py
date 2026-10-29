@@ -107,7 +107,7 @@ try:
 except ImportError:  # pragma: no cover
     spawn_background = None
 
-__version__ = "5.2.1"
+__version__ = "5.2.2"
 
 # 软依赖的框架最低版本（运行时检测，仅提示不强制）
 MIN_FRAMEWORK_VERSION = (2, 7, 1)
@@ -221,27 +221,6 @@ class QQBotConfig(BotAccountConfig):
             },
         },
     )
-    api_base_url: str = field(
-        default=DEFAULT_API_BASE_URL,
-        metadata={
-            "description": "OpenAPI 根地址（默认官方地址，可自定义用于代理）",
-            "ui": {"widget": "text", "group": "advanced", "order": 4},
-        },
-    )
-    access_token_url: str = field(
-        default="",
-        metadata={
-            "description": "自定义 access_token 接口地址（留空使用官方接口）",
-            "ui": {"widget": "text", "group": "advanced", "order": 5},
-        },
-    )
-    gateway_url: str = field(
-        default="",
-        metadata={
-            "description": "WebSocket 网关地址（留空时通过 /gateway/bot 动态获取）",
-            "ui": {"widget": "text", "group": "connection", "order": 6},
-        },
-    )
     webhook_path: str = field(
         default="/webhook",
         metadata={
@@ -260,13 +239,6 @@ class QQBotConfig(BotAccountConfig):
         metadata={
             "description": "机器人ID（留空时连接后自动获取，也可手动填写用于 Using() 定位账户）",
             "ui": {"widget": "text", "group": "basic", "order": 8},
-        },
-    )
-    sandbox: bool = field(
-        default=False,
-        metadata={
-            "description": "[已废弃] 官方已统一使用 api.bot.qq.com，此字段仅用于兼容旧配置",
-            "ui": {"widget": "switch", "group": "advanced", "order": 99},
         },
     )
 
@@ -817,7 +789,6 @@ class QQBotAdapter(sdk.BaseAdapter):
         self._pending_msg_ids: Dict[str, str] = {}
         self._pending_requests: Dict[str, dict] = {}
         self._bot_group_openids: Dict[str, str] = {}
-        self._sandbox_warned = False
 
         converter = QQBotConverter(
             bot_id_getter=lambda: self.bot_id,
@@ -885,8 +856,6 @@ class QQBotAdapter(sdk.BaseAdapter):
                 if has_real:
                     return
             new_account = {"appid": appid, "secret": secret, "mode": "websocket", "enabled": True}
-            if data.get("sandbox"):
-                new_account["sandbox"] = True
             data["accounts"] = {"default": new_account}
             config_mgr.setConfig(key, data)
             self.logger.info("已将旧版扁平配置迁移到 accounts.default")
@@ -956,10 +925,6 @@ class QQBotAdapter(sdk.BaseAdapter):
     async def _run_account(self, name: str):
         rt = self._runtimes[name]
         cfg = rt.config
-        if cfg.sandbox and not self._sandbox_warned:
-            self._sandbox_warned = True
-            self.logger.warning(f"账户 {name}: sandbox 已废弃，官方已统一使用 {DEFAULT_API_BASE_URL}")
-
         try:
             await self._fetch_self_info(rt)
         except Exception as e:
@@ -1044,7 +1009,7 @@ class QQBotAdapter(sdk.BaseAdapter):
 
     async def _refresh_token(self, rt: _AccountRuntime):
         cfg = rt.config
-        url = cfg.access_token_url or DEFAULT_ACCESS_TOKEN_URL
+        url = DEFAULT_ACCESS_TOKEN_URL
         last_exc: Optional[Exception] = None
         for attempt in range(TOKEN_RETRY_TIMES):
             try:
@@ -1086,7 +1051,7 @@ class QQBotAdapter(sdk.BaseAdapter):
         rt = self._get_runtime(name, cfg)
         return await self._http(
             method,
-            f"{(cfg.api_base_url or DEFAULT_API_BASE_URL).rstrip('/')}{path}",
+            f"{DEFAULT_API_BASE_URL}{path}",
             json_body=json_body,
             params=params,
             rt=rt,
@@ -1369,7 +1334,7 @@ class QQBotAdapter(sdk.BaseAdapter):
                         return self.make_error(retcode=32100, message=f"无法读取图片: {media_ref!r}")
                     fname = file_name or "image.png"
                     files = {"file_image": (fname, image_bytes, "application/octet-stream")}
-                base = (cfg.api_base_url or DEFAULT_API_BASE_URL).rstrip("/")
+                base = DEFAULT_API_BASE_URL
                 resp_result = await self._http(
                     "POST",
                     f"{base}{endpoint}",
