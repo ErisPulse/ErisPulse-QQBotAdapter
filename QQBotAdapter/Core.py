@@ -108,7 +108,7 @@ try:
 except ImportError:  # pragma: no cover
     spawn_background = None
 
-__version__ = "5.2.2"
+__version__ = "5.3.0"
 
 # 软依赖的框架最低版本（运行时检测，仅提示不强制）
 MIN_FRAMEWORK_VERSION = (2, 7, 1)
@@ -245,18 +245,18 @@ class QQBotConfig(BotAccountConfig):
 
 
 INTENT_OPTIONS = [
-    {"label": "0 GUILDS - 频道基础事件（所有机器人可用）", "value": 0},
-    {"label": "1 GUILD_MEMBERS - 频道成员事件（私域）", "value": 1},
-    {"label": "9 GUILD_MESSAGES - 频道消息事件（私域）", "value": 9},
-    {"label": "10 GUILD_MESSAGE_REACTIONS - 频道消息表态", "value": 10},
-    {"label": "12 DIRECT_MESSAGE - 频道私聊消息（需申请）", "value": 12},
-    {"label": "24 GROUP_MEMBER - 群成员事件", "value": 24},
-    {"label": "25 GROUP_AND_C2C_EVENT - 群聊/单聊消息（需开通群聊能力）", "value": 25},
-    {"label": "26 INTERACTION - 互动事件（按钮/回传，需开通）", "value": 26},
-    {"label": "27 MESSAGE_AUDIT - 消息审核事件（私域）", "value": 27},
-    {"label": "28 FORUMS_EVENT - 论坛事件（私域）", "value": 28},
-    {"label": "29 AUDIO_ACTION - 音频事件", "value": 29},
-    {"label": "30 PUBLIC_GUILD_MESSAGES - 公域频道消息事件", "value": 30},
+    {"label": "0 频道基础（通用）", "value": 0},
+    {"label": "1 频道成员（私域）", "value": 1},
+    {"label": "9 频道消息（私域）", "value": 9},
+    {"label": "10 频道消息表态", "value": 10},
+    {"label": "12 频道私信（需申请）", "value": 12},
+    {"label": "24 群成员事件", "value": 24},
+    {"label": "25 群聊/单聊（需开通）", "value": 25},
+    {"label": "26 互动事件（需开通）", "value": 26},
+    {"label": "27 消息审核（私域）", "value": 27},
+    {"label": "28 论坛事件（私域）", "value": 28},
+    {"label": "29 音频事件", "value": 29},
+    {"label": "30 公域频道消息", "value": 30},
 ]
 
 
@@ -864,6 +864,9 @@ class QQBotAdapter(sdk.BaseAdapter):
             self.logger.debug(f"旧配置迁移检查跳过: {e}")
 
     async def start(self):
+        # 扫码接入端点与面板扩展区无条件注册（无可用账户时也要能扫码添加）
+        self._setup_qr_access()
+
         enabled = self.enabled_accounts
         usable = {}
         for name, cfg in enabled.items():
@@ -887,7 +890,6 @@ class QQBotAdapter(sdk.BaseAdapter):
             self._account_tasks[name] = task
 
         self.logger.info(f"QQBot 适配器已启动，共 {len(usable)} 个账户")
-        self._setup_qr_access()
 
     # ==================== 扫码一键接入 ====================
 
@@ -963,12 +965,16 @@ class QQBotAdapter(sdk.BaseAdapter):
                     data = _cfg.getConfig(key) or {}
                     if not isinstance(data, dict):
                         data = {}
-                    base = "qr"
-                    name = base
-                    i = 1
-                    while name in data and (data[name].get("appid") != r.get("appid")):
-                        i += 1
-                        name = f"{base}{i}"
+                    dft = data.get("default")
+                    if isinstance(dft, dict) and not dft.get("appid"):
+                        name = "default"
+                    else:
+                        base = "qr"
+                        name = base
+                        i = 1
+                        while name in data and (data[name].get("appid") != r.get("appid")):
+                            i += 1
+                            name = f"{base}{i}"
                     data[name] = {
                         "appid": r.get("appid", ""),
                         "secret": r.get("secret", ""),
@@ -1089,6 +1095,17 @@ button{padding:8px 18px;border-radius:10px;border:1px solid rgba(128,128,128,.4)
 </script></body></html>'''
 
     async def shutdown(self):
+        try:
+            from ErisPulse.Core import router as _router
+
+            _router.unregister_http_route("qqbot", "/qr/start")
+            _router.unregister_http_route("qqbot", "/qr/poll")
+        except Exception:
+            pass
+        try:
+            sdk.Dashboard.unregister_section("qqbot-qr")
+        except Exception:
+            pass
         for rt in list(self._runtimes.values()):
             if rt.bot_id:
                 try:
@@ -1828,6 +1845,52 @@ button{padding:8px 18px;border-radius:10px;border:1px solid rgba(128,128,128,.4)
 
     # ==================== 事件分发 ====================
 
+    _NICKNAME_TTL = 12 * 3600
+    _NICKNAME_NEG_TTL = 600
+
+    def _ensure_nickname_cache(self):
+        if not hasattr(self, "_nickname_cache"):
+            self._nickname_cache: Dict[Tuple[str, str, str], Tuple[str, float, bool]] = {}
+        return self._nickname_cache
+
+    async def _fill_group_nickname(self, event: dict, payload: dict, account_name: str):
+        """群消息发送者昵称补全（GET /v2/groups/{gid}/members/{mid}）"""
+        group_id = str(payload.get("group_openid") or "")
+        author = payload.get("author") or {}
+        member_id = str(
+            author.get("member_openid")
+            or author.get("id")
+            or event.get("user_id")
+            or ""
+        )
+        if not group_id or not member_id:
+            return
+        cache = self._ensure_nickname_cache()
+        key = (account_name, group_id, member_id)
+        now = _time.time()
+        hit = cache.get(key)
+        if hit is not None:
+            name, ts, ok = hit
+            if now - ts < (self._NICKNAME_TTL if ok else self._NICKNAME_NEG_TTL):
+                if ok and name:
+                    event["user_nickname"] = name
+                return
+        result = await self._request(
+            "GET",
+            f"/v2/groups/{group_id}/members/{member_id}",
+            account_id=account_name or None,
+        )
+        name = ""
+        if isinstance(result, dict) and result.get("status") == "ok":
+            data = result.get("data") or {}
+            if isinstance(data, dict):
+                name = str(data.get("username") or data.get("nick") or "")
+        cache[key] = (name, now, bool(name))
+        if name:
+            event["user_nickname"] = name
+            self._trim_dict(cache)
+            self.logger.debug(f"群成员昵称已缓存: {member_id} -> {name}")
+
     async def _dispatch_event(self, payload: dict, raw_type: str, account_name: str = "") -> Optional[dict]:
         event = self.convert(payload, raw_type)
         if not event:
@@ -1838,6 +1901,13 @@ button{padding:8px 18px;border-radius:10px;border:1px solid rgba(128,128,128,.4)
 
         event_type = event.get("type")
         if event_type == "message":
+            # 群消息昵称补全：v2 群聊事件的 author 不携带昵称（官方隐私设计），
+            # 经群成员资料接口惰性查询（缓存 12h / 失败负缓存 10min 防频控）
+            if event.get("detail_type") == "group" and not event.get("user_nickname"):
+                try:
+                    await self._fill_group_nickname(event, payload, account_name)
+                except Exception:
+                    pass
             self._store_event_msg_id(event)
             if event.get("detail_type") == "group":
                 self._get_logger().debug(
