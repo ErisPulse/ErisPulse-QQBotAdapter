@@ -6,7 +6,7 @@
 
 # ErisPulse-QQBotAdapter
 
-**ErisPulse adapter for QQ Official Bot — groups, DMs & channels**
+**ErisPulse QQ 官方机器人适配器 — 群聊 / 私聊 / 频道**
 
 <p>
   <a href="https://pypi.org/project/ErisPulse-QQBotAdapter/"><img src="https://img.shields.io/pypi/v/ErisPulse-QQBotAdapter?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"></a>
